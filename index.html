@@ -1,0 +1,192 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股板块资金流向分时动态趋势</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:linear-gradient(135deg,#f8fafc 0%,#e2e8f0 100%);
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  color:#1f2937
+}
+.container{width:100%;max-width:1400px}
+header{text-align:center;margin-bottom:24px}
+h1{font-size:32px;font-weight:700;color:#111827;letter-spacing:-0.02em}
+.subtitle{font-size:14px;color:#6b7280;margin-top:6px}
+.card{background:#fff;border-radius:16px;box-shadow:0 10px 40px rgba(0,0,0,.08);padding:24px}
+#chart{width:100%;height:620px}
+.controls{text-align:center;margin-top:20px}
+button{
+  background:#111827;color:#fff;border:none;border-radius:8px;
+  padding:10px 28px;font-size:14px;font-weight:600;cursor:pointer;
+  transition:transform .15s,background .15s
+}
+button:hover{background:#374151;transform:translateY(-1px)}
+button:disabled{background:#9ca3af;cursor:not-allowed;transform:none}
+.status{margin-top:16px;text-align:center;font-size:14px;color:#6b7280;min-height:22px}
+.error{
+  margin-top:16px;padding:16px;background:#fef2f2;color:#b91c1c;
+  border-radius:8px;text-align:center;font-size:14px;line-height:1.6
+}
+.hidden{display:none}
+@media(max-width:768px){h1{font-size:22px}#chart{height:420px}.card{padding:16px}}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1 id="dateTitle">A股板块资金流向</h1>
+    <p class="subtitle" id="subTitle">正在加载数据…</p>
+  </header>
+  <div class="card"><div id="chart"></div></div>
+  <div class="controls"><button id="replayBtn" disabled>重播动画</button></div>
+  <div id="status" class="status"></div>
+  <div id="errorMsg" class="error hidden"></div>
+</div>
+<script>
+// ============================================================
+// A股板块资金流向分时动态趋势图 (GitHub Pages 部署版)
+// 数据来源: docs/data.json (由 fetch_data.py 每日自动生成)
+// ============================================================
+const C = { ANIM_MS: 15000 };
+const PI = ['#991b1b','#b91c1c','#dc2626','#ef4444','#f97316','#fb923c','#f59e0b','#fbbf24'];
+const PO = ['#064e3b','#065f46','#047857','#059669','#10b981','#34d399','#2dd4bf','#5eead4'];
+const MARKS = new Set(['09:30','10:30','11:30','13:30','15:00']);
+
+const $=id=>document.getElementById(id);
+const titleEl=$('dateTitle'), subEl=$('subTitle'), chartEl=$('chart');
+const replayBtn=$('replayBtn'), statusEl=$('status'), errorEl=$('errorMsg');
+
+let chart=null, chartData=null;
+
+function hexRGBA(h,a){
+  const c=h.replace('#','');
+  return `rgba(${parseInt(c[0]+c[1],16)},${parseInt(c[2]+c[3],16)},${parseInt(c[4]+c[5],16)},${a})`;
+}
+function fmtDate(s){
+  try{const d=new Date(s.replace(/-/g,'/'));return `${d.getMonth()+1}月${d.getDate()}日`}catch(e){return s}
+}
+
+// 给板块分配颜色
+function assignColors(sectors){
+  // 净流入(正)和净流出(负)分开排序
+  const inflow=sectors.filter(s=>s.net>=0).sort((a,b)=>b.net-a.net);
+  const outflow=sectors.filter(s=>s.net<0).sort((a,b)=>a.net-b.net);
+  inflow.forEach((s,i)=>s.color=PI[Math.min(i,PI.length-1)]);
+  outflow.forEach((s,i)=>s.color=PO[Math.min(i,PO.length-1)]);
+  return [...inflow,...outflow];
+}
+
+// 构建 ECharts option
+function buildOpt(d){
+  const sectors=assignColors(JSON.parse(JSON.stringify(d.sectors)));
+  const series=sectors.map(s=>({
+    name:s.name,type:'line',smooth:.4,symbol:'none',data:s.values,
+    lineStyle:{width:3,color:s.color},
+    endLabel:{
+      show:true,
+      formatter(p){
+        const v=typeof p.value==='number'?p.value:s.net;
+        return p.seriesName+' '+(v>=0?'+':'')+v.toFixed(1)+'亿';
+      },
+      color:'#fff',backgroundColor:hexRGBA(s.color,.88),
+      borderRadius:4,padding:[4,8],fontSize:12,fontWeight:600,distance:8
+    },
+    labelLayout:{moveOverlap:'shiftY',hideOverlap:false},
+    emphasis:{focus:'series',lineStyle:{width:4}},
+    animationDuration:C.ANIM_MS,animationEasing:'linear',animationDelay:0
+  }));
+  series.push({
+    name:'零轴',type:'line',data:[],
+    markLine:{silent:true,symbol:'none',data:[{yAxis:0}],lineStyle:{color:'#374151',type:'dashed',width:1.5},label:{show:false}}
+  });
+  return {
+    backgroundColor:'transparent',
+    grid:{left:'3%',right:'16%',top:'6%',bottom:'6%',containLabel:true},
+    tooltip:{
+      trigger:'axis',
+      backgroundColor:'rgba(255,255,255,0.96)',borderColor:'#e5e7eb',borderWidth:1,
+      textStyle:{color:'#1f2937'},
+      formatter(params){
+        const time=params[0]?.axisValue;
+        let html=`<div style="font-weight:700;margin-bottom:6px;font-size:13px">${time}</div>`;
+        params.forEach(p=>{
+          if(p.seriesName==='零轴')return;
+          const vt=p.value;
+          html+=`<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color}"></span>
+            <span style="flex:1">${p.seriesName}</span>
+            <span style="font-weight:700;min-width:70px;text-align:right">${vt>=0?'+':''}${vt.toFixed(1)}亿</span>
+          </div>`;
+        });
+        return html;
+      }
+    },
+    xAxis:{
+      type:'category',boundaryGap:false,data:d.times,
+      axisLine:{lineStyle:{color:'#e5e7eb'}},axisTick:{show:false},
+      axisLabel:{color:'#6b7280',fontSize:12,interval:(idx,val)=>MARKS.has(val)},
+      splitLine:{show:false}
+    },
+    yAxis:{
+      type:'value',min:-d.yMax,max:d.yMax,
+      axisLine:{show:true,lineStyle:{color:'#e5e7eb'}},axisTick:{show:false},
+      axisLabel:{color:'#6b7280',fontSize:12,formatter:v=>v.toFixed(0)+'亿'},
+      splitLine:{lineStyle:{color:'#f3f4f6'}}
+    },
+    series,animation:true
+  };
+}
+
+function render(d){
+  if(chart)chart.dispose();
+  chart=echarts.init(chartEl);
+  chart.setOption(buildOpt(d));
+  titleEl.textContent=(d.tradeDate?fmtDate(d.tradeDate)+' ':'')+'收盘资金流向';
+  subEl.textContent='数据来源：东方财富 ｜ 每日自动更新';
+  statusEl.textContent='已展示 '+d.sectors.length+' 条板块资金流向曲线';
+  replayBtn.disabled=false;
+}
+
+function replay(){
+  if(!chartData)return;
+  replayBtn.disabled=true;
+  render(chartData);
+  setTimeout(()=>{replayBtn.disabled=false},C.ANIM_MS+200);
+}
+
+async function init(){
+  try{
+    const resp=await fetch('./data.json?_='+Date.now());
+    if(!resp.ok)throw new Error('数据加载失败: HTTP '+resp.status);
+    chartData=await resp.json();
+    if(!chartData.sectors||chartData.sectors.length===0)throw new Error('数据为空');
+    if(!chartData.yMax){
+      let ma=0;
+      chartData.sectors.forEach(s=>(s.values||[]).forEach(v=>{ma=Math.max(ma,Math.abs(v))}));
+      chartData.yMax=Math.max(Math.ceil(ma*1.12/5)*5,5);
+    }
+    render(chartData);
+  }catch(e){
+    console.error(e);
+    errorEl.textContent='数据加载失败: '+e.message;
+    errorEl.classList.remove('hidden');
+    statusEl.textContent='';
+    replayBtn.disabled=true;
+  }
+}
+
+replayBtn.addEventListener('click',replay);
+window.addEventListener('resize',()=>chart&&chart.resize());
+init();
+</script>
+</body>
+</html>
